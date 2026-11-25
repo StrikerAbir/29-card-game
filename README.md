@@ -18,5 +18,8 @@ Open `index.html` in any modern browser, or enable GitHub Pages (Settings → Pa
 - **7th card:** the bidder may let the 7th card they are dealt set trump. It is set aside and hidden until trump is revealed; it can't be led (unless it is the last card), and it can be shown and played when the bidder can't follow suit.
 - **Single hand:** after the second deal, a player may call single hand: no trump, the partner sits out, and the caller must win all 8 tricks alone. Success is +3 game points, failure is −3.
 
+## Responsive
+The layout scales to phones (portrait and landscape), tablets, laptops and large desktops. In landscape on short screens the table moves left and the scores and prompts move to a side panel.
+
 ## Files
 - `index.html` — the whole game (HTML, CSS, JavaScript; no dependencies)
