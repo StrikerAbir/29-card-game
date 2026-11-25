@@ -12,5 +12,9 @@ Open `index.html` in any modern browser, or enable GitHub Pages (Settings → Pa
 - Trump stays hidden. A player who cannot follow suit may press **Show trump**; the suit is revealed and that player must trump if able.
 - A bidding side that wins at least its bid scores +1 game point, otherwise −1. First to +6 wins; −6 loses.
 
+## Optional rules (built in)
+- **7th card:** the bidder may let the 7th card they are dealt set trump. It is set aside and hidden until trump is revealed; it can't be led (unless it is the last card), and it can be shown and played when the bidder can't follow suit.
+- **Single hand:** after the second deal, a player may call single hand: no trump, the partner sits out, and the caller must win all 8 tricks alone. Success is +3 game points, failure is −3.
+
 ## Files
 - `index.html` — the whole game (HTML, CSS, JavaScript; no dependencies)
