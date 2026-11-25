@@ -238,8 +238,10 @@ button{font:inherit;cursor:pointer}
   <ul>
     <li>Each player gets 4 cards. Bidding starts with the player left of the dealer and goes clockwise.</li>
     <li>A bid is the number of points your side promises to win, from 16 to 28. The first three players in turn may open or pass (the dealer may not open).</li>
-    <li>After an opening bid, the next opposing player answers, and the two sides bargain back and forth. On your turn you can <b>raise</b>, say <b>ditto</b> (match the current bid and take it over), or <b>pass</b>. Only the player who was holding the bid and has just been outbid can say ditto. Anyone else, including a partner who takes over, and anyone answering the opening bid or another ditto, must bid higher or pass.</li>
-    <li>A pass is final for that player, but then their partner takes over for the team. When both partners of a side have passed, the other side wins the bidding.</li>
+    <li>The player who opens the bidding <b>leads</b> it, together with their partner. After the opening bid, the next player from the other side answers.</li>
+    <li>The other side can only <b>raise</b> (bid higher than the current bid) or <b>pass</b>. They can never say ditto.</li>
+    <li>When the leading side is raised, its player can only say <b>ditto</b> (match the raise and keep the bid) or <b>pass</b>. Then the other side must raise again or pass. Only the leading side has the ditto power.</li>
+    <li>A pass is final for that player, but then their partner takes over for the team. If the leader passes, the partner takes over the lead and gets the ditto power. When both partners of a side have passed, the other side wins the bidding.</li>
     <li>The highest bidder secretly picks a trump suit from the cards they hold. The other 4 cards are then dealt to everyone.</li>
     <li>If everyone passes, the cards are redealt.</li>
   </ul>
@@ -376,7 +378,7 @@ function winnerOf(trick){
   return pool.reduce((a,b)=>POW[b.card.r]>POW[a.card.r]?b:a);
 }
 function returnSeventh(){
-  if(G.seventh){G.hands[G.bidder].push(G.seventh);sortHand(G.hands[G.bidder]);G.seventh=null}
+  if(G.seventh){const o=G.seventhOwner??G.bidder;G.hands[o].push(G.seventh);sortHand(G.hands[o]);G.seventh=null}
 }
 function revealTrump(by,asked){
   G.trumpRevealed=true;if(G.revealTrick===null)G.revealTrick=G.trickNo;
@@ -432,14 +434,12 @@ function botOpen(seat){
   if(est<16)return 0;
   return Math.min(est,16+(est>=19&&Math.random()<.5?1:0));
 }
-// response to the current bid: {t:'pass'} | {t:'ditto'} | {t:'raise',amt}
-function botRespond(seat,amt,canDitto){
+// response to the current bid. The side that leads the bidding can only ditto (match) or pass.
+// The other side can only raise or pass.
+function botRespond(seat,amt,isLead){
   const est=Math.min(28,Math.floor(botEst(seat)));
-  if(est>amt){
-    if(canDitto&&Math.random()<.3)return {t:'ditto'};
-    return {t:'raise',amt:Math.min(est,amt+1+(Math.random()<.3?1:0))};
-  }
-  if(est===amt&&canDitto&&Math.random()<.5)return {t:'ditto'};
+  if(isLead)return est>=amt&&Math.random()<.92?{t:'ditto'}:{t:'pass'};
+  if(est>amt)return {t:'raise',amt:Math.min(est,amt+1+(Math.random()<.3?1:0))};
   return {t:'pass'};
 }
 // defenders: double if they think the bid will fail
@@ -708,11 +708,13 @@ function humanBid(ctx){
     let sub;
     if(ctx.open)sub='Nobody has bid yet. Open the bidding or pass.';
     else{
-      sub=`Current bid: <b>${ctx.amt}</b> held by ${ctx.holder===2?'your partner':NAMES[ctx.holder]}.`+(ctx.takeover?' Your partner passed, so you bid for the team.':'');
+      const who=ctx.holder===2?'your partner':(ctx.holder===0?'you':NAMES[ctx.holder]);
+      sub=`Current bid: <b>${ctx.amt}</b> held by ${who}.`+(ctx.takeover?' Your partner passed, so you bid for the team.':'');
+      sub+=ctx.isLead?' Your side leads the bidding, so you can only match it with Ditto, or pass.':' You must bid higher than that, or pass.';
     }
     const {p,row}=panel('Your turn to bid',sub+' A pass is final for you.');
     row.appendChild(btn('Pass',()=>{clearActions();res({t:'pass'})}));
-    if(!ctx.open&&ctx.canDitto)row.appendChild(btn(`Ditto ${ctx.amt}`,()=>{clearActions();res({t:'ditto'})}));
+    if(!ctx.open&&ctx.canDitto)row.appendChild(btn(`Ditto ${ctx.amt}`,()=>{clearActions();res({t:'ditto'})},'gold'));
     const min=ctx.open?16:ctx.amt+1;
     if(ctx.open||ctx.canRaise)for(let b=min;b<=28;b++)row.appendChild(btn(String(b),()=>{clearActions();res({t:'raise',amt:b})},'gold'));
     clearActions();$('actions').appendChild(p);
@@ -759,7 +761,7 @@ async function bidding(){
   const seatsInOrder=[0,1,2,3].map(i=>(first+i)%4);
   const passed=[false,false,false,false];
   const speaker=[null,null];
-  let amt=0,holder=null,dittoLast=false,prevHolder=null; // prevHolder = the player just outbid; only they may say ditto
+  let amt=0,holder=null,leadTeam=null; // the side whose player opened leads the bidding and alone can ditto
   const you=s=>s===0;
   const setBubble=(seat,t)=>{G.bubbles[seat]=t};
   const publish=()=>{G.bid=amt;G.bidder=holder};
@@ -775,7 +777,7 @@ async function bidding(){
     if(you(seat)&&!AUTO)bid=await humanBid({open:true});
     else{await sleep(900);const ob=botOpen(seat);bid=ob?{t:'raise',amt:ob}:{t:'pass'}}
     if(bid&&bid.t!=='pass'&&bid.amt){
-      amt=bid.amt;holder=seat;dittoLast=true;prevHolder=null;publish(); // no ditto in answer to an opening bid
+      amt=bid.amt;holder=seat;leadTeam=seat%2;publish();
       setBubble(seat,'Bid '+amt);
       msg(`${NAMES[seat]} ${you(seat)?'open':'opens'} the bidding at ${amt}.`);
     }else{
@@ -799,20 +801,21 @@ async function bidding(){
   while(guard++<300){
     const seat=speaker[cur];
     if(seat===null||seat===undefined)break;
-    const canRaise=amt<28;
-    const canDitto=!dittoLast&&amt>=16&&seat===prevHolder;
+    const isLead=cur===leadTeam;
+    const canRaise=!isLead&&amt<28;
+    const canDitto=isLead&&amt>=16;
     let act;
     G.turn=seat;publish();render();
     if(!canRaise&&!canDitto)act={t:'pass'};
-    else if(you(seat)&&!AUTO)act=await humanBid({open:false,amt,holder,canRaise,canDitto,takeover:passed[(seat+2)%4]});
-    else{await sleep(900);act=botRespond(seat,amt,canDitto);if(!canRaise&&act.t==='raise')act={t:'pass'}}
-    if(act.t==='raise'&&act.amt>amt){
-      prevHolder=holder;amt=act.amt;holder=seat;dittoLast=false;speaker[cur]=seat;publish();
+    else if(you(seat)&&!AUTO)act=await humanBid({open:false,amt,holder,canRaise,canDitto,isLead,takeover:passed[(seat+2)%4]});
+    else{await sleep(900);act=botRespond(seat,amt,isLead)}
+    if(act.t==='raise'&&canRaise&&act.amt>amt){
+      amt=act.amt;holder=seat;speaker[cur]=seat;publish();
       setBubble(seat,'Bid '+amt);
       msg(`${NAMES[seat]} ${you(seat)?'raise':'raises'} to ${amt}.`);
       cur=1-cur;
     }else if(act.t==='ditto'&&canDitto){
-      holder=seat;dittoLast=true;prevHolder=null;speaker[cur]=seat;publish();
+      holder=seat;speaker[cur]=seat;publish();
       setBubble(seat,'Ditto '+amt);
       msg(`${NAMES[seat]} ${you(seat)?'say':'says'} ditto: ${amt}.`);
       cur=1-cur;
@@ -884,7 +887,7 @@ async function chooseTrump(){
   if(s==='seventh'){
     for(let i=0;i<4;i++){
       const nc=G.stock.splice(0,4);
-      if(i===G.bidder){G.seventh=nc[2];G.trump=nc[2].s;nc.splice(2,1)}
+      if(i===G.bidder){G.seventh=nc[2];G.seventhOwner=i;G.trump=nc[2].s;nc.splice(2,1)}
       G.hands[i].push(...nc);sortHand(G.hands[i]);
     }
     msg(G.bidder===0?`Your 7th card is ${cname(G.seventh)}, so ${SUITS[G.trump]} is trump. It's set aside and stays hidden.`:`${NAMES[G.bidder]} is using the 7th card as trump. It stays hidden.`);
@@ -911,8 +914,8 @@ async function singleHandPhase(){
       call=botSingle(seat);
     }
     if(call){
-      G.single=seat;G.bidder=seat;G.trump=null;G.trumpRevealed=true;G.stake=1;G.doubler=null;
       returnSeventh();G.seventh=null;
+      G.single=seat;G.bidder=seat;G.trump=null;G.trumpRevealed=true;G.stake=1;G.doubler=null;
       G.bubbles=['','','',''];
       msg(`${NAMES[seat]} calls SINGLE HAND! No trump, partner sits out, all 8 tricks needed.`);
       G.turn=null;render();
