@@ -196,8 +196,9 @@ button{font:inherit;cursor:pointer}
   <p>That makes 28 points in the deck. The winner of the last trick gets 1 extra point, which makes 29 in total.</p>
   <h4>Bidding</h4>
   <ul>
-    <li>Each player gets 4 cards, then everyone bids once, starting left of the dealer.</li>
-    <li>A bid is the number of points your side promises to win, from 16 to 28. You can pass.</li>
+    <li>Each player gets 4 cards, then bidding starts with the player left of the dealer and goes clockwise.</li>
+    <li>A bid is the number of points your side promises to win, from 16 to 28. On your turn you either bid higher than the current bid or pass.</li>
+    <li>Bidding goes around as many times as needed, so players can bargain by raising each other. A pass is final. Bidding ends when everyone else has passed, or when someone bids 28.</li>
     <li>The highest bidder secretly picks a trump suit from the cards they hold. The other 4 cards are then dealt to everyone.</li>
     <li>If everyone passes, the cards are redealt.</li>
   </ul>
@@ -269,6 +270,7 @@ function newRound(){
   G.trump=null;G.trumpRevealed=false;
   G.trick=[];G.played=new Set();G.mustCut=[false,false,false,false];
   G.teamPts=[0,0];G.trickNo=0;G.bubbles=['','','',''];
+  G.est=[null,null,null,null];
   G.seventh=null;G.single=null;G.singleFail=false;G.singleTricks=0;
   G.turn=null;G.winSeat=null;G.phase='bidding';
 }
@@ -343,16 +345,23 @@ function bestSuit(hand){
   for(let s=0;s<4;s++){const sc=suitScore(hand,s);if(sc>bs){bs=sc;best=s}}
   return best;
 }
-function botBid(seat){
+function botEst(seat){
+  if(G.est[seat]!==null)return G.est[seat];
   const hand=G.hands[seat];
-  const s=bestSuit(hand);
-  const side=hand.filter(c=>c.s!==s).reduce((a,c)=>a+pts(c)*0.4,0);
-  let est=12+suitScore(hand,s)+side+(Math.random()*2-1);
-  if(G.bidder!==null&&G.bidder===(seat+2)%4&&est<G.bid+3)return 0;
-  const cap=Math.min(28,Math.floor(est));
+  const su=bestSuit(hand);
+  const side=hand.filter(c=>c.s!==su).reduce((a,c)=>a+pts(c)*0.4,0);
+  G.est[seat]=12+suitScore(hand,su)+side+(Math.random()*2-1);
+  return G.est[seat];
+}
+// returns 0 to pass, otherwise a bid higher than the current one
+function botBid(seat){
+  const est=Math.min(28,Math.floor(botEst(seat)));
   const min=Math.max(16,G.bid+1);
-  if(cap<min)return 0;
-  return Math.min(cap,min+(Math.random()<.45?1:0));
+  const partnerHigh=G.bidder!==null&&G.bidder===(seat+2)%4;
+  if(partnerHigh&&est<G.bid+3)return 0;
+  if(est<min)return 0;
+  if(G.bidder===null)return Math.min(est,16+(est>=19&&Math.random()<.5?1:0));
+  return Math.min(est,min+(Math.random()<.35?1:0));
 }
 function botTrump(seat){
   const h=G.hands[seat];
@@ -582,7 +591,7 @@ function btn(label,fn,cls){
 function humanBid(){
   return new Promise(res=>{
     const min=Math.max(16,G.bid+1);
-    const hi=G.bidder!==null?`Highest bid: ${G.bid} by ${NAMES[G.bidder]}.`:'No bid yet.';
+    const hi=G.bidder!==null?`Highest bid: <b>${G.bid}</b> by ${G.bidder===2?'your partner':NAMES[G.bidder]}. Raise it or pass. A pass is final.`:'No bid yet. Open the bidding or pass.';
     const {p,row}=panel('Your bid',`${hi} How many points will your side win?`);
     row.appendChild(btn('Pass',()=>{clearActions();res(0)}));
     for(let b=min;b<=28;b++)row.appendChild(btn(String(b),()=>{clearActions();res(b)},'gold'));
@@ -615,11 +624,19 @@ function humanPlay(){return new Promise(res=>{humanRes=res;render()})}
 /* ---------- game flow ---------- */
 async function bidding(){
   G.phase='bidding';
-  const order=[1,2,3,4].map(i=>(G.dealer+i)%4);
-  msg(`${NAMES[G.dealer]} deals. Bidding starts with ${NAMES[order[0]]}.`);
+  const first=(G.dealer+1)%4;
+  const active=[true,true,true,true];
+  msg(`${NAMES[G.dealer]} deals. Bidding starts with ${NAMES[first]}. You can raise as many times as you like until the others pass.`);
   render();
   await sleep(1000);
-  for(const seat of order){
+  let guard=0;
+  for(let i=0;guard++<200;i++){
+    const seat=(first+i)%4;
+    const left=active.filter(Boolean).length;
+    if(G.bid>=28)break;
+    if(left===0)break;
+    if(G.bidder!==null&&left===1&&active[G.bidder])break;
+    if(!active[seat]||seat===G.bidder)continue;
     G.turn=seat;render();
     let bid;
     if(seat===0&&!AUTO){
@@ -629,17 +646,21 @@ async function bidding(){
       bid=botBid(seat);
     }
     if(bid){
+      const raised=G.bidder!==null;
       G.bid=bid;G.bidder=seat;
       G.bubbles[seat]='Bid '+bid;
-      msg(`${NAMES[seat]} bids ${bid}.`);
+      const you=seat===0;msg(`${NAMES[seat]} ${raised?(you?'raise to':'raises to'):(you?'bid':'bids')} ${bid}.`);
     }else{
+      active[seat]=false;
       G.bubbles[seat]='Pass';
-      msg(`${NAMES[seat]} passes.`);
+      msg(`${NAMES[seat]} ${seat===0?'pass':'passes'}.`);
     }
     render();
   }
   G.turn=null;
-  await sleep(1100);
+  if(G.bidder!==null)msg(`${NAMES[G.bidder]} ${G.bidder===0?'win':'wins'} the bidding at ${G.bid}.`);
+  render();
+  await sleep(1200);
   return G.bidder!==null;
 }
 
