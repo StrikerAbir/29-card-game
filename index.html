@@ -211,6 +211,13 @@ button{font:inherit;cursor:pointer}
     <li>After trump is revealed, a player who can't follow suit may play any card.</li>
     <li>The highest card of the led suit wins the trick, unless it was cut by a trump. The winner leads next.</li>
   </ul>
+  <h4>Marriage (pair)</h4>
+  <ul>
+    <li>A player who holds both the King and Queen of trump in hand can declare a marriage once trump has been revealed, from the trick after the one where it was revealed. Both cards must still be in hand.</li>
+    <li>The game declares it for you automatically at the start of your turn when it's allowed.</li>
+    <li>If the bidding side holds the marriage, their target drops by 4 (never below 16). If the defenders hold it, the target rises by 4 (never above 28).</li>
+    <li>It doesn't apply in a single hand, since there is no trump.</li>
+  </ul>
   <h4>Double and redouble</h4>
   <ul>
     <li>After the bidder chooses trump and before the second deal, each opponent of the bidder in turn may <b>double</b> if they think the bid will fail.</li>
@@ -279,7 +286,7 @@ function newRound(){
   G.trick=[];G.played=new Set();G.mustCut=[false,false,false,false];
   G.teamPts=[0,0];G.trickNo=0;G.bubbles=['','','',''];
   G.est=[null,null,null,null];
-  G.stake=1;G.doubler=null;
+  G.stake=1;G.doubler=null;G.marriage=null;G.revealTrick=null;
   G.seventh=null;G.single=null;G.singleFail=false;G.singleTricks=0;
   G.turn=null;G.winSeat=null;G.phase='bidding';
 }
@@ -305,6 +312,23 @@ function canAsk(seat){
   const led=ledSuit();
   return !G.hands[seat].some(c=>c.s===led);
 }
+// points the declaring side needs, adjusted by a declared marriage (K+Q of trump)
+function target(){
+  let t=G.bid;
+  if(G.marriage){
+    t=G.marriage.team===team(G.bidder)?Math.max(16,G.bid-4):Math.min(28,G.bid+4);
+    if(G.bid<16)t=G.bid;
+  }
+  return t;
+}
+function hasMarriage(seat){
+  if(G.trump===null)return false;
+  const h=G.hands[seat];
+  return h.some(c=>c.s===G.trump&&c.r==='K')&&h.some(c=>c.s===G.trump&&c.r==='Q');
+}
+function marriageAvailable(seat){
+  return G.single===null&&G.marriage===null&&G.trumpRevealed&&G.revealTrick!==null&&G.trickNo>G.revealTrick&&hasMarriage(seat);
+}
 function winnerOf(trick){
   const led=trick[0].card.s;
   const cuts=trick.filter(t=>t.cut);
@@ -315,7 +339,7 @@ function returnSeventh(){
   if(G.seventh){G.hands[G.bidder].push(G.seventh);sortHand(G.hands[G.bidder]);G.seventh=null}
 }
 function revealTrump(by,asked){
-  G.trumpRevealed=true;
+  G.trumpRevealed=true;if(G.revealTrick===null)G.revealTrick=G.trickNo;
   const viaSeventh=!!G.seventh;
   returnSeventh();
   const extra=viaSeventh?' (the 7th card)':'';
@@ -332,7 +356,7 @@ function playCard(seat,card){
   if(hi>=0)hand.splice(hi,1);
   else if(card===G.seventh){
     // bidder declares trump by playing the 7th card
-    G.trumpRevealed=true;G.seventh=null;
+    G.trumpRevealed=true;if(G.revealTrick===null)G.revealTrick=G.trickNo;G.seventh=null;
     msg(`${NAMES[seat]} shows the 7th card and plays it. Trump is ${SUITS[G.trump]}.`);
   }
   const led=ledSuit();
@@ -533,7 +557,7 @@ function render(){
     else if(G.trumpRevealed)tr='trump '+suitSpan(G.trump);
     else if(G.bidder===0||AUTO)tr='trump '+suitSpan(G.trump)+' (secret)';
     else tr='trump hidden';
-    info=`Bid <b>${G.bid}</b> by ${NAMES[G.bidder]}${G.stake>1?` · <b>×${G.stake}</b>`:''} · ${tr}<br>Points: you ${G.teamPts[0]} – ${G.teamPts[1]} them`;
+    info=`Bid <b>${G.bid}</b> by ${NAMES[G.bidder]}${G.stake>1?` · <b>×${G.stake}</b>`:''} · ${tr}<br>Points: you ${G.teamPts[0]} – ${G.teamPts[1]} them · need <b>${target()}</b>${G.marriage?' (marriage)':''}`;
   }
   $('roundinfo').innerHTML=info;
 
@@ -858,6 +882,14 @@ async function playTricks(){
       const seat=order[i];
       G.turn=seat;
       if(seat===G.bidder&&G.seventh&&G.hands[seat].length===0)returnSeventh();
+      if(marriageAvailable(seat)){
+        G.marriage={seat,team:team(seat)};
+        const forBidders=team(seat)===team(G.bidder);
+        msg(`${NAMES[seat]} ${seat===0?'declare':'declares'} MARRIAGE (K${SUITS[G.trump]} Q${SUITS[G.trump]})! ${Math.abs(target()-G.bid)===0?'The target stays at '+target()+' (the minimum).':(forBidders?'The bid target drops':'The bid target rises')+' by '+Math.abs(target()-G.bid)+': '+TEAMNAMES[team(G.bidder)]+' now need '+target()+'.'}`);
+        G.bubbles[seat]='Marriage!';
+        render();await sleep(2200);
+        G.bubbles[seat]='';
+      }
       if(i===0)msg(seat===0?'You lead.':`${NAMES[seat]} leads.`);
       render();
       let card;
@@ -910,11 +942,12 @@ async function endRound(){
       `${NAMES[G.single]} ${made?'won all 8 tricks alone':'lost a trick'}, so ${TEAMNAMES[bt]} ${made?'score +3':'lose 3'} game points.<br>Game: ${G.scores[0]} – ${G.scores[1]}`);
     msg(made?`${NAMES[G.single]} swept all 8 tricks!`:`${NAMES[G.single]} fell short.`);
   }else{
-    made=got>=G.bid;
+    const need=target();
+    made=got>=need;
     const st=G.stake||1;
     G.scores[bt]+=made?st:-st;
     render();
-    const stNote=st>1?` (${st===2?'doubled':'redoubled'}: stake ${st})`:'';
+    const stNote=(st>1?` (${st===2?'doubled':'redoubled'}: stake ${st})`:'')+(G.marriage?` (marriage: target ${need})`:'');
     pnl=panel(made?'Bid made!':'Bid failed',
       `${NAMES[G.bidder]} bid ${G.bid}${stNote}. ${TEAMNAMES[bt]} won ${got} point${got===1?'':'s'}, so they ${made?'score +'+st:'lose '+st} game point${st===1?'':'s'}.<br>Round points: you ${G.teamPts[0]} – ${G.teamPts[1]} them · Game: ${G.scores[0]} – ${G.scores[1]}`);
     msg(made?`${TEAMNAMES[bt]} made the bid.`:`${TEAMNAMES[bt]} fell short.`);
