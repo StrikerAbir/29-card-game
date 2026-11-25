@@ -211,6 +211,13 @@ button{font:inherit;cursor:pointer}
     <li>After trump is revealed, a player who can't follow suit may play any card.</li>
     <li>The highest card of the led suit wins the trick, unless it was cut by a trump. The winner leads next.</li>
   </ul>
+  <h4>Double and redouble</h4>
+  <ul>
+    <li>After the bidder chooses trump and before the second deal, each opponent of the bidder in turn may <b>double</b> if they think the bid will fail.</li>
+    <li>If a double is called, the bidder or the bidder's partner may <b>redouble</b>.</li>
+    <li>The stake for making or missing the bid is 1 game point normally, 2 if doubled, and 4 if redoubled.</li>
+    <li>If someone calls single hand, doubles no longer apply, because single hand has its own stake.</li>
+  </ul>
   <h4>7th card rule</h4>
   <ul>
     <li>If you win the bid but don't want to pick a suit from your first 4 cards, choose <b>7th card</b>.</li>
@@ -272,6 +279,7 @@ function newRound(){
   G.trick=[];G.played=new Set();G.mustCut=[false,false,false,false];
   G.teamPts=[0,0];G.trickNo=0;G.bubbles=['','','',''];
   G.est=[null,null,null,null];
+  G.stake=1;G.doubler=null;
   G.seventh=null;G.single=null;G.singleFail=false;G.singleTricks=0;
   G.turn=null;G.winSeat=null;G.phase='bidding';
 }
@@ -369,6 +377,25 @@ function botRespond(seat,amt,canDitto){
   }
   if(est===amt&&canDitto&&Math.random()<.5)return {t:'ditto'};
   return {t:'pass'};
+}
+// defenders: double if they think the bid will fail
+function botDouble(seat){
+  if(window.__FORCED!==undefined)return Math.random()<window.__FORCED;
+  const est=botEst(seat);
+  let pr=0;
+  if(est>=G.bid-1)pr+=.35;
+  if(G.bid>=22)pr+=.15;
+  if(est<15)pr-=.2;
+  return Math.random()<Math.max(0,pr);
+}
+// declaring side: redouble if confident
+function botRedouble(seat,trumpChoice){
+  if(window.__FORCER!==undefined)return Math.random()<window.__FORCER;
+  if(seat===G.bidder){
+    const su=(typeof trumpChoice==='number')?trumpChoice:bestSuit(G.hands[seat]);
+    return suitScore(G.hands[seat],su)>=6.5&&Math.random()<.5;
+  }
+  return botEst(seat)>=G.bid&&Math.random()<.3;
 }
 function botTrump(seat){
   const h=G.hands[seat];
@@ -506,7 +533,7 @@ function render(){
     else if(G.trumpRevealed)tr='trump '+suitSpan(G.trump);
     else if(G.bidder===0||AUTO)tr='trump '+suitSpan(G.trump)+' (secret)';
     else tr='trump hidden';
-    info=`Bid <b>${G.bid}</b> by ${NAMES[G.bidder]} · ${tr}<br>Points: you ${G.teamPts[0]} – ${G.teamPts[1]} them`;
+    info=`Bid <b>${G.bid}</b> by ${NAMES[G.bidder]}${G.stake>1?` · <b>×${G.stake}</b>`:''} · ${tr}<br>Points: you ${G.teamPts[0]} – ${G.teamPts[1]} them`;
   }
   $('roundinfo').innerHTML=info;
 
@@ -625,6 +652,17 @@ function humanTrump(){
     clearActions();$('actions').appendChild(p);
   });
 }
+function humanDouble(kind){
+  return new Promise(res=>{
+    const isRe=kind==='redouble';
+    const {p,row}=panel(isRe?'Redouble?':'Double?',
+      isRe?`${NAMES[G.doubler]} doubled the bid of ${G.bid}. Redouble to make the stake 4 game points, won or lost?`
+          :`${NAMES[G.bidder]} bid ${G.bid}. If you think they will fail, double: the stake becomes 2 game points, won or lost.`);
+    row.appendChild(btn('No',()=>{clearActions();res(false)}));
+    row.appendChild(btn(isRe?'Redouble (×4)':'Double (×2)',()=>{clearActions();res(true)},'gold'));
+    clearActions();$('actions').appendChild(p);
+  });
+}
 function humanSingle(){
   return new Promise(res=>{
     const {p,row}=panel('Single hand?','Win all 8 tricks alone, with no trump and your partner sitting out. Success: +3 game points. Failure: −3.');
@@ -721,6 +759,40 @@ async function bidding(){
   return true;
 }
 
+async function doublePhase(choice){
+  G.stake=1;G.doubler=null;
+  const b=G.bidder;
+  const defenders=[(b+1)%4,(b+3)%4];
+  for(const seat of defenders){
+    G.turn=seat;render();
+    let d;
+    if(seat===0&&!AUTO)d=await humanDouble('double');
+    else{await sleep(800);d=botDouble(seat)}
+    if(d){
+      G.stake=2;G.doubler=seat;G.bubbles[seat]='Double!';
+      msg(`${NAMES[seat]} ${seat===0?'double':'doubles'} the bid! Stake is now 2 game points.`);
+      render();await sleep(1000);
+      break;
+    }
+  }
+  if(G.stake===2){
+    for(const seat of [b,(b+2)%4]){
+      G.turn=seat;render();
+      let r;
+      if(seat===0&&!AUTO)r=await humanDouble('redouble');
+      else{await sleep(800);r=botRedouble(seat,choice)}
+      if(r){
+        G.stake=4;G.bubbles[seat]='Redouble!';
+        msg(`${NAMES[seat]} ${seat===0?'redouble':'redoubles'}! Stake is now 4 game points.`);
+        render();await sleep(1000);
+        break;
+      }
+    }
+    if(G.stake===2){msg('No redouble. The stake stays at 2 game points.');render();await sleep(900)}
+  }
+  G.turn=null;G.bubbles=['','','',''];
+}
+
 async function chooseTrump(){
   G.phase='trump';G.bubbles=['','','',''];G.turn=G.bidder;
   msg(`${NAMES[G.bidder]} ${G.bidder===0?'are':'is'} choosing trump (bid ${G.bid})…`);
@@ -729,6 +801,7 @@ async function chooseTrump(){
   if(G.bidder===0&&!AUTO){s=await humanTrump()}
   else{await sleep(1200);s=botTrump(G.bidder)}
   G.turn=null;
+  await doublePhase(s);
   if(s==='seventh'){
     for(let i=0;i<4;i++){
       const nc=G.stock.splice(0,4);
@@ -759,7 +832,7 @@ async function singleHandPhase(){
       call=botSingle(seat);
     }
     if(call){
-      G.single=seat;G.bidder=seat;G.trump=null;G.trumpRevealed=true;
+      G.single=seat;G.bidder=seat;G.trump=null;G.trumpRevealed=true;G.stake=1;G.doubler=null;
       returnSeventh();G.seventh=null;
       G.bubbles=['','','',''];
       msg(`${NAMES[seat]} calls SINGLE HAND! No trump, partner sits out, all 8 tricks needed.`);
@@ -838,10 +911,12 @@ async function endRound(){
     msg(made?`${NAMES[G.single]} swept all 8 tricks!`:`${NAMES[G.single]} fell short.`);
   }else{
     made=got>=G.bid;
-    G.scores[bt]+=made?1:-1;
+    const st=G.stake||1;
+    G.scores[bt]+=made?st:-st;
     render();
+    const stNote=st>1?` (${st===2?'doubled':'redoubled'}: stake ${st})`:'';
     pnl=panel(made?'Bid made!':'Bid failed',
-      `${NAMES[G.bidder]} bid ${G.bid}. ${TEAMNAMES[bt]} won ${got} point${got===1?'':'s'}, so they ${made?'score +1':'lose 1'} game point.<br>Round points: you ${G.teamPts[0]} – ${G.teamPts[1]} them · Game: ${G.scores[0]} – ${G.scores[1]}`);
+      `${NAMES[G.bidder]} bid ${G.bid}${stNote}. ${TEAMNAMES[bt]} won ${got} point${got===1?'':'s'}, so they ${made?'score +'+st:'lose '+st} game point${st===1?'':'s'}.<br>Round points: you ${G.teamPts[0]} – ${G.teamPts[1]} them · Game: ${G.scores[0]} – ${G.scores[1]}`);
     msg(made?`${TEAMNAMES[bt]} made the bid.`:`${TEAMNAMES[bt]} fell short.`);
   }
   const {p}=pnl;
