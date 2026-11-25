@@ -238,7 +238,7 @@ button{font:inherit;cursor:pointer}
   <ul>
     <li>Each player gets 4 cards. Bidding starts with the player left of the dealer and goes clockwise.</li>
     <li>A bid is the number of points your side promises to win, from 16 to 28. The first three players in turn may open or pass (the dealer may not open).</li>
-    <li>After an opening bid, the next opposing player answers, and the two sides bargain back and forth. On your turn you can <b>raise</b>, say <b>ditto</b> (match the current bid and take it over, but not straight after another ditto), or <b>pass</b>.</li>
+    <li>After an opening bid, the next opposing player answers, and the two sides bargain back and forth. On your turn you can <b>raise</b>, say <b>ditto</b> (match the current bid and take it over), or <b>pass</b>. Ditto is not allowed in answer to the opening bid, and not straight after another ditto. In those cases you must bid higher or pass.</li>
     <li>A pass is final for that player, but then their partner takes over for the team. When both partners of a side have passed, the other side wins the bidding.</li>
     <li>The highest bidder secretly picks a trump suit from the cards they hold. The other 4 cards are then dealt to everyone.</li>
     <li>If everyone passes, the cards are redealt.</li>
@@ -775,7 +775,7 @@ async function bidding(){
     if(you(seat)&&!AUTO)bid=await humanBid({open:true});
     else{await sleep(900);const ob=botOpen(seat);bid=ob?{t:'raise',amt:ob}:{t:'pass'}}
     if(bid&&bid.t!=='pass'&&bid.amt){
-      amt=bid.amt;holder=seat;dittoLast=false;publish();
+      amt=bid.amt;holder=seat;dittoLast=true;publish(); // no ditto in answer to an opening bid
       setBubble(seat,'Bid '+amt);
       msg(`${NAMES[seat]} ${you(seat)?'open':'opens'} the bidding at ${amt}.`);
     }else{
