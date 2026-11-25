@@ -8,7 +8,7 @@ Open `index.html` in any modern browser, or enable GitHub Pages (Settings → Pa
 ## Rules in brief
 - 32 cards (7 to Ace). Rank in each suit: J, 9, A, 10, K, Q, 8, 7.
 - Points: J = 3, 9 = 2, A = 1, 10 = 1, others 0. Total 28, plus 1 for the last trick = 29.
-- Bidding goes around the table as many times as needed (16–28). Raise or pass; a pass is final. The highest bidder secretly picks a trump suit.
+- Bidding (16–28): the first three players may open (the dealer may not). After that the two teams bargain back and forth: raise, say *ditto* (match the bid), or pass. A pass is final, then the partner takes over. When both partners of a side have passed, the other side wins the bid. If the first three pass, the cards are redealt.
 - Trump stays hidden. A player who cannot follow suit may press **Show trump**; the suit is revealed and that player must trump if able.
 - A bidding side that wins at least its bid scores +1 game point, otherwise −1. First to +6 wins; −6 loses.
 

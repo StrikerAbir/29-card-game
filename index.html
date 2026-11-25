@@ -196,9 +196,10 @@ button{font:inherit;cursor:pointer}
   <p>That makes 28 points in the deck. The winner of the last trick gets 1 extra point, which makes 29 in total.</p>
   <h4>Bidding</h4>
   <ul>
-    <li>Each player gets 4 cards, then bidding starts with the player left of the dealer and goes clockwise.</li>
-    <li>A bid is the number of points your side promises to win, from 16 to 28. On your turn you either bid higher than the current bid or pass.</li>
-    <li>Bidding goes around as many times as needed, so players can bargain by raising each other. A pass is final. Bidding ends when everyone else has passed, or when someone bids 28.</li>
+    <li>Each player gets 4 cards. Bidding starts with the player left of the dealer and goes clockwise.</li>
+    <li>A bid is the number of points your side promises to win, from 16 to 28. The first three players in turn may open or pass (the dealer may not open).</li>
+    <li>After an opening bid, the next opposing player answers, and the two sides bargain back and forth. On your turn you can <b>raise</b>, say <b>ditto</b> (match the current bid and take it over, but not straight after another ditto), or <b>pass</b>.</li>
+    <li>A pass is final for that player, but then their partner takes over for the team. When both partners of a side have passed, the other side wins the bidding.</li>
     <li>The highest bidder secretly picks a trump suit from the cards they hold. The other 4 cards are then dealt to everyone.</li>
     <li>If everyone passes, the cards are redealt.</li>
   </ul>
@@ -353,15 +354,21 @@ function botEst(seat){
   G.est[seat]=12+suitScore(hand,su)+side+(Math.random()*2-1);
   return G.est[seat];
 }
-// returns 0 to pass, otherwise a bid higher than the current one
-function botBid(seat){
+// opening bid: 0 = pass
+function botOpen(seat){
   const est=Math.min(28,Math.floor(botEst(seat)));
-  const min=Math.max(16,G.bid+1);
-  const partnerHigh=G.bidder!==null&&G.bidder===(seat+2)%4;
-  if(partnerHigh&&est<G.bid+3)return 0;
-  if(est<min)return 0;
-  if(G.bidder===null)return Math.min(est,16+(est>=19&&Math.random()<.5?1:0));
-  return Math.min(est,min+(Math.random()<.35?1:0));
+  if(est<16)return 0;
+  return Math.min(est,16+(est>=19&&Math.random()<.5?1:0));
+}
+// response to the current bid: {t:'pass'} | {t:'ditto'} | {t:'raise',amt}
+function botRespond(seat,amt,canDitto){
+  const est=Math.min(28,Math.floor(botEst(seat)));
+  if(est>amt){
+    if(canDitto&&Math.random()<.3)return {t:'ditto'};
+    return {t:'raise',amt:Math.min(est,amt+1+(Math.random()<.3?1:0))};
+  }
+  if(est===amt&&canDitto&&Math.random()<.5)return {t:'ditto'};
+  return {t:'pass'};
 }
 function botTrump(seat){
   const h=G.hands[seat];
@@ -491,6 +498,8 @@ function render(){
   let info='Bidding…';
   if(G.single!==null){
     info=`<b>Single hand</b> by ${NAMES[G.single]} · no trump<br>${NAMES[G.single]} must win all 8 tricks (won ${G.singleTricks})`;
+  }else if(G.phase==='bidding'){
+    info=G.bidder!==null?`Bidding · high bid <b>${G.bid}</b> by ${NAMES[G.bidder]}`:'Bidding…';
   }else if(G.bidder!==null){
     let tr;
     if(G.trump===null)tr='picking trump';
@@ -588,13 +597,18 @@ function btn(label,fn,cls){
   const b=document.createElement('button');
   b.className='btn '+(cls||'');b.innerHTML=label;b.onclick=fn;return b;
 }
-function humanBid(){
+function humanBid(ctx){
   return new Promise(res=>{
-    const min=Math.max(16,G.bid+1);
-    const hi=G.bidder!==null?`Highest bid: <b>${G.bid}</b> by ${G.bidder===2?'your partner':NAMES[G.bidder]}. Raise it or pass. A pass is final.`:'No bid yet. Open the bidding or pass.';
-    const {p,row}=panel('Your bid',`${hi} How many points will your side win?`);
-    row.appendChild(btn('Pass',()=>{clearActions();res(0)}));
-    for(let b=min;b<=28;b++)row.appendChild(btn(String(b),()=>{clearActions();res(b)},'gold'));
+    let sub;
+    if(ctx.open)sub='Nobody has bid yet. Open the bidding or pass.';
+    else{
+      sub=`Current bid: <b>${ctx.amt}</b> held by ${ctx.holder===2?'your partner':NAMES[ctx.holder]}.`+(ctx.takeover?' Your partner passed, so you bid for the team.':'');
+    }
+    const {p,row}=panel('Your turn to bid',sub+' A pass is final for you.');
+    row.appendChild(btn('Pass',()=>{clearActions();res({t:'pass'})}));
+    if(!ctx.open&&ctx.canDitto)row.appendChild(btn(`Ditto ${ctx.amt}`,()=>{clearActions();res({t:'ditto'})}));
+    const min=ctx.open?16:ctx.amt+1;
+    if(ctx.open||ctx.canRaise)for(let b=min;b<=28;b++)row.appendChild(btn(String(b),()=>{clearActions();res({t:'raise',amt:b})},'gold'));
     clearActions();$('actions').appendChild(p);
   });
 }
@@ -625,48 +639,91 @@ function humanPlay(){return new Promise(res=>{humanRes=res;render()})}
 async function bidding(){
   G.phase='bidding';
   const first=(G.dealer+1)%4;
-  const active=[true,true,true,true];
-  msg(`${NAMES[G.dealer]} deals. Bidding starts with ${NAMES[first]}. You can raise as many times as you like until the others pass.`);
+  const seatsInOrder=[0,1,2,3].map(i=>(first+i)%4);
+  const passed=[false,false,false,false];
+  const speaker=[null,null];
+  let amt=0,holder=null,dittoLast=false;
+  const you=s=>s===0;
+  const setBubble=(seat,t)=>{G.bubbles[seat]=t};
+  const publish=()=>{G.bid=amt;G.bidder=holder};
+  msg(`${NAMES[G.dealer]} ${G.dealer===0?'deal':'deals'}. ${NAMES[first]} ${first===0?'bid':'bids'} first.`);
   render();
   await sleep(1000);
-  let guard=0;
-  for(let i=0;guard++<200;i++){
-    const seat=(first+i)%4;
-    const left=active.filter(Boolean).length;
-    if(G.bid>=28)break;
-    if(left===0)break;
-    if(G.bidder!==null&&left===1&&active[G.bidder])break;
-    if(!active[seat]||seat===G.bidder)continue;
+
+  // opening: the first three players in turn may open; the dealer may not
+  for(let k=0;k<3&&holder===null;k++){
+    const seat=seatsInOrder[k];
     G.turn=seat;render();
     let bid;
-    if(seat===0&&!AUTO){
-      bid=await humanBid();
+    if(you(seat)&&!AUTO)bid=await humanBid({open:true});
+    else{await sleep(900);const ob=botOpen(seat);bid=ob?{t:'raise',amt:ob}:{t:'pass'}}
+    if(bid&&bid.t!=='pass'&&bid.amt){
+      amt=bid.amt;holder=seat;dittoLast=false;publish();
+      setBubble(seat,'Bid '+amt);
+      msg(`${NAMES[seat]} ${you(seat)?'open':'opens'} the bidding at ${amt}.`);
     }else{
-      await sleep(900);
-      bid=botBid(seat);
-    }
-    if(bid){
-      const raised=G.bidder!==null;
-      G.bid=bid;G.bidder=seat;
-      G.bubbles[seat]='Bid '+bid;
-      const you=seat===0;msg(`${NAMES[seat]} ${raised?(you?'raise to':'raises to'):(you?'bid':'bids')} ${bid}.`);
-    }else{
-      active[seat]=false;
-      G.bubbles[seat]='Pass';
-      msg(`${NAMES[seat]} ${seat===0?'pass':'passes'}.`);
+      passed[seat]=true;setBubble(seat,'Pass');
+      msg(`${NAMES[seat]} ${you(seat)?'pass':'passes'}.`);
     }
     render();
   }
+  if(holder===null){
+    G.turn=null;G.bidder=null;G.bid=0;render();
+    return false;
+  }
+  // first responder on each team
+  speaker[holder%2]=holder;
+  const other=1-holder%2;
+  speaker[other]=seatsInOrder.slice(seatsInOrder.indexOf(holder)+1).concat(seatsInOrder).find(s=>s%2===other&&!passed[s])??null;
+  if(speaker[other]===null)speaker[other]=seatsInOrder.find(s=>s%2===other&&!passed[s])??null;
+
+  // bargaining: the team that does not hold the bid answers, back and forth
+  let cur=other,guard=0;
+  while(guard++<300){
+    const seat=speaker[cur];
+    if(seat===null||seat===undefined)break;
+    const canRaise=amt<28;
+    const canDitto=!dittoLast&&amt>=16;
+    let act;
+    G.turn=seat;publish();render();
+    if(!canRaise&&!canDitto)act={t:'pass'};
+    else if(you(seat)&&!AUTO)act=await humanBid({open:false,amt,holder,canRaise,canDitto,takeover:passed[(seat+2)%4]});
+    else{await sleep(900);act=botRespond(seat,amt,canDitto);if(!canRaise&&act.t==='raise')act={t:'pass'}}
+    if(act.t==='raise'&&act.amt>amt){
+      amt=act.amt;holder=seat;dittoLast=false;speaker[cur]=seat;publish();
+      setBubble(seat,'Bid '+amt);
+      msg(`${NAMES[seat]} ${you(seat)?'raise':'raises'} to ${amt}.`);
+      cur=1-cur;
+    }else if(act.t==='ditto'&&canDitto){
+      holder=seat;dittoLast=true;speaker[cur]=seat;publish();
+      setBubble(seat,'Ditto '+amt);
+      msg(`${NAMES[seat]} ${you(seat)?'say':'says'} ditto: ${amt}.`);
+      cur=1-cur;
+    }else{
+      passed[seat]=true;setBubble(seat,'Pass');
+      const partner=(seat+2)%4;
+      if(!passed[partner]){
+        speaker[cur]=partner;
+        msg(`${NAMES[seat]} ${you(seat)?'pass':'passes'}. ${NAMES[partner]} ${partner===0?'take':'takes'} over for the team.`);
+      }else{
+        msg(`${NAMES[seat]} ${you(seat)?'pass':'passes'}. That team is out of the bidding.`);
+        render();
+        break;
+      }
+    }
+    render();
+  }
+  publish();
   G.turn=null;
-  if(G.bidder!==null)msg(`${NAMES[G.bidder]} ${G.bidder===0?'win':'wins'} the bidding at ${G.bid}.`);
+  msg(`${NAMES[holder]} ${holder===0?'win':'wins'} the bidding at ${amt}.`);
   render();
-  await sleep(1200);
-  return G.bidder!==null;
+  await sleep(1300);
+  return true;
 }
 
 async function chooseTrump(){
   G.phase='trump';G.bubbles=['','','',''];G.turn=G.bidder;
-  msg(`${NAMES[G.bidder]} won the bid at ${G.bid} and is choosing trump…`);
+  msg(`${NAMES[G.bidder]} ${G.bidder===0?'are':'is'} choosing trump (bid ${G.bid})…`);
   render();
   let s;
   if(G.bidder===0&&!AUTO){s=await humanTrump()}
@@ -742,8 +799,8 @@ async function playTricks(){
     if(G.trickNo===7&&G.single===null)p+=1;
     if(G.single!==null){
       G.winSeat=w.seat;
-      if(w.seat===G.single){G.singleTricks++;msg(`${NAMES[w.seat]} wins trick ${G.trickNo+1} of 8.`)}
-      else{G.singleFail=true;msg(`${NAMES[w.seat]} beats the single hand!`)}
+      if(w.seat===G.single){G.singleTricks++;msg(`${NAMES[w.seat]} ${w.seat===0?'win':'wins'} trick ${G.trickNo+1} of 8.`)}
+      else{G.singleFail=true;msg(`${NAMES[w.seat]} ${w.seat===0?'beat':'beats'} the single hand!`)}
       render();
       await sleep(1500);
       if(G.singleFail)break;
@@ -752,7 +809,7 @@ async function playTricks(){
     }
     G.teamPts[team(w.seat)]+=p;
     G.winSeat=w.seat;
-    msg(`${NAMES[w.seat]} wins the trick${p?` (+${p} point${p>1?'s':''}${G.trickNo===7?', incl. last-trick bonus':''})`:''}.`);
+    msg(`${NAMES[w.seat]} ${w.seat===0?'win':'wins'} the trick${p?` (+${p} point${p>1?'s':''}${G.trickNo===7?', incl. last-trick bonus':''})`:''}.`);
     render();
     await sleep(1500);
     G.leader=w.seat;
